@@ -1,0 +1,323 @@
+---
+title: "Simulation 2"
+author: "Camille Carter"
+date: "2023-02-15"
+output: html_document
+---
+Libraries
+```{r}
+# load the libraries
+library(readxl)
+library(quantmod)
+library(graphics)
+library(ks)
+library(stats)
+library(EnvStats)
+library(gtools)
+library(triangle)
+library(car)
+library(tidyverse)
+
+```
+
+Notes:
+- Keep Caluations the same 
+
+What we are ultimately trying to simulate: 
+- Cost of a single dry well
+- Net Present Value (NPV) of a Single Wet Well
+
+Given Information:
+- Drilling Cost 
+- Seismic Cost *Dependent on # of wells
+- Lease Cost *Dependent on # of wells
+- Completion Cost
+- Labor/Overhead Costs 
+- Inital Production **Correlated
+- Decline Rate **Correlated
+- Price Projections of oil 
+- Net Revenue Interest ie revenue after royalties
+- Operating Costs
+- Severence Taxes (on final post NRI profit)
+
+Initial thoughts on dry well costs 
+- Seismic Cost
+- Lease Cost 
+- Labor/Overhead Costs 
+- Drilling Cost
+
+Initial thoughts on wet well NPV (Essentially calculating Final Net Revenues)
+- Initial Costs 
+  - Seismic Cost *Dependent on # of wells
+  - Lease Cost *Dependent on # of wells
+  - Completion Costs 
+- Final Net Revenues = Net Value Interest - Costs 
+  - Net Value Interest
+    - Percentage(kept)
+    - Oil Price
+    - Annual Production 
+      - IP
+      - Decline Rate 
+  - Recurring Costs 
+    - Labor/Overhead Costs
+    - Drilling Costs
+    - Operating Costs 
+    - Severence Taxes
+
+
+Data Load/Cleaning 
+```{r}
+
+#load data
+df <- read_excel("Analysis_Data.xlsx", sheet = "Drilling Cost", skip = 2)
+price_df <- read_excel("Analysis_Data.xlsx", sheet = "Price Projections", skip = 2)
+price_df <- as.data.frame(price_df)
+# Check the datatypes of the dataframe
+str(df)
+
+# Convert character to numeric variable
+char_column <- df$`Arithmetic Return - Crude Oil`
+non_numeric <- which(is.na(as.numeric(char_column)) & is.character(char_column))
+char_column[non_numeric] <- 0
+df$`Arithmetic Return - Crude Oil` <- as.numeric(char_column)
+
+char_column <- df$`Arithmetic Return - Natural Gas`
+non_numeric <- which(is.na(as.numeric(char_column)) & is.character(char_column))
+char_column[non_numeric] <- 0
+df$`Arithmetic Return - Natural Gas` <- as.numeric(char_column)
+
+char_column <- df$`Arithmetic Return - Dry Well`
+non_numeric <- which(is.na(as.numeric(char_column)) & is.character(char_column))
+char_column[non_numeric] <- 0
+df$`Arithmetic Return - Dry Well` <- as.numeric(char_column)
+
+
+# Taking the average of Nominal Cost and Arithmetic Return
+df$average_nominalcost <- rowMeans(df[, c("U.S. Nominal Cost per Crude Oil Well Drilled (Thousand Dollars per Well)",
+                                          "U.S. Nominal Cost per Natural Gas Well Drilled (Thousand Dollars per Well)",
+                                          "U.S. Nominal Cost per Dry Well Drilled (Thousand Dollars per Well)")])
+df$average_arithmeticreturn <- rowMeans(df[, c("Arithmetic Return - Crude Oil", 
+                                               "Arithmetic Return - Natural Gas",
+                                               "Arithmetic Return - Dry Well")])
+
+# Extract data between 1990 and 2006
+subset_df <- subset(df, Date >= as.POSIXct("1990-06-30") & Date <= as.POSIXct("2006-06-30"))
+
+# 2006 to 2023
+n = 100000 #number of simulations to run parameter
+mu_ar = mean(subset_df$average_arithmeticreturn)
+sd_ar = sd(subset_df$average_arithmeticreturn)
+
+P_06 <- last(subset_df$average_nominalcost) # Initial Price in 2006
+n_23    <- rep() # Normal Distribution for 2023
+
+set.seed(626)
+for(i in 1:n) {
+  # 6 values for 2007 to 2012 from the Normal Distribution
+  P_07_12_n   <- 1 + rnorm(n=6, mean=mu_ar, sd=sd_ar) 
+  
+  # 3 decreasing values for 2012 to 2015 from Triangular distribution 
+  P_12_15 <- 1 + rtriangle(n=3, a=-0.22, b=-0.07, c=-0.0917) 
+  
+  # 8 values for 2012 to 2015 from Triangular distribution
+  P_15_23 <- 1 + rtriangle(n=8, a=0.02, b=0.06, c=0.05) # Triangular distribution for 2015 to 2023
+  
+  # Normal Distribution output for 2023
+  P_23_n = P_06 * prod(P_07_12_n) * prod(P_12_15) * prod(P_15_23)
+  n_23 <- append(n_23, P_23_n) 
+}
+
+```
+
+Dry Well Estimation 
+```{r}
+
+n = 10000
+dw_sim <- rep() # Dry Well Simulation
+
+set.seed(626)
+
+for(i in 1:n) {
+
+  # leased acres per well; cost is $960 
+  lease <- rnorm(n=1, mean=600, sd=50) * 960 
+  
+  # leased acres per well; cost is $43000 
+  seismic <- rnorm(n=1, mean=3, sd=0.35) * 43000
+  
+  # Labor costs Triangular distribution
+  labor <- rtriangle(n=1, a=172000, b=279000, c=215000) 
+  
+  #drilling costs - not sure about this calculation (in millions of dollars)
+  drilling <- sample(n_23, 1) * 1000
+  
+  #Total Costs 
+  tot_cost <- lease + seismic + labor + drilling
+  dw_sim <- append(dw_sim, tot_cost)
+
+}
+
+# Dry Wells Histogram
+hist(dw_sim, breaks=50, main='Single Dry Well Cost', xlab='Cost (in Dollars)')
+
+```
+
+Net Present Value of a Single Wet Well
+```{r}
+
+n = 10000
+
+#Initial Costs 
+ic_sim <- rep() 
+
+set.seed(626)
+for(i in 1:n) {
+  # leased acres per well; cost is $960 
+  lease <- rnorm(n=1, mean=600, sd=50) * 960 
+  
+  # leased acres per well; cost is $43000 
+  seismic <- rnorm(n=1, mean=3, sd=0.35) * 43000
+  
+  #drilling costs - not sure about this calculation (in millions of dollars)
+  drilling <- sample(n_23, 1) * 1000
+  
+  #completion costs - only for wet wells 
+  completion <- rnorm(n=1, mean=390000, sd=50000) 
+  
+  #Total Costs 
+  tot_cost <- lease + seismic + drilling + completion
+  ic_sim <- append(ic_sim, tot_cost)
+}
+
+# #  - Net Value Interest
+#     - Percentage(kept)
+#     - Oil Price
+#     - Annual Production 
+#       - IP
+#       - Decline Rate 
+
+#Correlating IP and Decline Rate 
+Value.r.bal <- rep(0,10000)
+R <- matrix(data=cbind(1,0.64, 0.64, 1), nrow=2)
+U <- t(chol(R))
+
+standardize <- function(x){
+  x.std = (x - mean(x))/sd(x)
+  return(x.std)
+}
+
+destandardize <- function(x.std, x){
+  x.old = (x.std * sd(x)) + mean(x)
+  return(x.old)
+}
+
+m <- 420
+s <- 120
+location <- log(m^2 / sqrt(s^2 + m^2))
+shape <- sqrt(log(1 + (s^2 / m^2)))
+print(paste("location:", location))
+print(paste("shape:", shape))
+
+#Create 10000 IP from lognorm 
+set.seed(626)
+IP <- rlnorm(n, location, shape)
+
+#Decline rate, uniform between 15% and 32%
+set.seed(626)
+DR <- runif(n, min = .15, max = .32)
+
+both <- cbind(standardize(IP), standardize(DR))
+both_temp <- U %*% t(both)
+both_temp <- t(both_temp)
+  
+#Correlated IP and Decline Rates (10,000)
+#same across the same well
+cor_final <- cbind(destandardize(both_temp[,1], IP), destandardize(both_temp[,2], DR))
+cor_final <- as.data.frame(cor_final)
+
+######################
+#                    #
+# Start Calculation  #
+#                    #
+######################
+
+sim <- 10000
+NPV_sim <- rep()
+for(i in 1:sim) {
+  #Calculate production risk for one year 
+  rate_combination <- sample_n(cor_final, 1) #randomly pick one set of rates
+  decline_rate <- rate_combination[1,2]
+  year_start <- rate_combination[1,1] 
+  total_oil <- rep()
+  
+  for(i in 1:15) {
+    year_end <- (1 - decline_rate) * year_start 
+    year_oil <- ((year_start + year_end)/2) * 365 
+    year_start <- year_end
+    total_oil <- append(total_oil, year_oil) #one well 
+  }
+  
+  #Calculate projected price in dollars using triangle distribution 
+  total_price <- rep()
+  
+  for(i in 1:15) {
+    min = price_df[i, 'Low Oil Price']
+    max = price_df[i, 'High Oil Price']
+    avg = price_df[i, 'AEO2021 Reference']
+    price <- rtriangle(n=1, a=min, b=max, c=avg)
+    total_price <- append(total_price, price)
+  }
+  
+  #Net Revenue Interest
+  NRI <- rnorm(n=1, mean=0.75, sd=0.02)
+  
+  #Severance Tax
+  ST = 1 - 0.046
+  
+  #Annual Revenue for 15 years for one well  
+  annual_revenue <- total_oil * total_price * NRI *ST 
+    
+  #Calculate Reoccuring Costs 
+    # - Recurring Costs 
+    #   - Labor/Overhead Costs
+    #   - Drilling Costs
+    #   - Operating Costs 
+    #   - Severence Taxes
+  
+  variable_costs <- rep()
+
+  for(i in 1:15) {
+    
+    # labor costs Triangular distribution
+    labor <- rtriangle(n=1, a=172000, b=279000, c=215000) 
+    
+    #operating costs (in dollars)
+    operating <- rnorm(n=1, mean=2.25, sd=0.3) * total_oil[i] 
+    
+    #total variable costs 
+    tot_cost <- labor + operating 
+    variable_costs <- append(variable_costs, tot_cost)
+  }
+  
+  FNR <- annual_revenue - variable_costs
+  
+  #Calculate Final NRP
+  NPV_variables <- rep()
+  for(i in 1:15) {
+  NPV_variable <- ((FNR[i])/((1 + .10)^i)) #for one year 
+  NPV_variables <- append(NPV_variables, NPV_variable)
+  }
+
+#sum fractions and subtract inital costs   
+NPV <- sum(NPV_variables) - sample(ic_sim, 1) 
+NPV_sim <- append(NPV_sim, NPV) 
+
+}
+
+#Plot Net Present Value
+hist(NPV_sim, breaks=50, main='Wet Well Net Present Value', xlab='Estimated NPV Value')
+summary(NPV_sim)
+
+```
+
+
